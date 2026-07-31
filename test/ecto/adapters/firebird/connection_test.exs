@@ -904,14 +904,14 @@ defmodule Ecto.Adapters.Firebird.ConnectionTest do
 
   test "in expression" do
     query = Schema |> select([e], 1 in []) |> plan()
-    assert all(query) == ~s{SELECT 1=0 FROM "schema" AS s0}
+    assert all(query) == ~s{SELECT 0 FROM "schema" AS s0}
 
     query =
       Schema
       |> select([e], 1 in ^[])
       |> plan()
 
-    assert all(query) == ~s{SELECT 1=0 FROM "schema" AS s0}
+    assert all(query) == ~s{SELECT 0 FROM "schema" AS s0}
 
     query =
       Schema
@@ -962,6 +962,17 @@ defmodule Ecto.Adapters.Firebird.ConnectionTest do
 
     query = Schema |> where([e], not false) |> select([e], e.x) |> plan()
     assert all(query) == ~s{SELECT s0."x" FROM "schema" AS s0 WHERE (NOT (1=0))}
+  end
+
+  test "empty in lists in predicate positions" do
+    query = Schema |> where([e], e.x in []) |> select([e], e.x) |> plan()
+    assert all(query) == ~s{SELECT s0."x" FROM "schema" AS s0 WHERE (1=0)}
+
+    query = Schema |> where([e], e.x in ^[]) |> select([e], e.x) |> plan()
+    assert all(query) == ~s{SELECT s0."x" FROM "schema" AS s0 WHERE (1=0)}
+
+    query = Schema |> where([e], e.y == 1 and e.x in ^[]) |> select([e], e.x) |> plan()
+    assert all(query) == ~s{SELECT s0."x" FROM "schema" AS s0 WHERE ((s0."y" = 1) AND 1=0)}
   end
 
   test "boolean literals in value positions keep integer form" do

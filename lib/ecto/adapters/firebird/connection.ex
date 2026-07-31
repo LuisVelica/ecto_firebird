@@ -1161,17 +1161,32 @@ defmodule Ecto.Adapters.Firebird.Connection do
   # Firebird distinguishes boolean predicates from values: an integer literal
   # is not a valid predicate, so "WHERE 0", "ON 1" or "x IN ()" rendered as "0"
   # raise "Invalid usage of boolean expression" (SQLCODE -104). In predicate
-  # positions (WHERE/HAVING/ON, AND/OR/NOT operands, empty IN) booleans render
-  # as "1=1"/"1=0", which every Firebird version accepts. Value positions
-  # (comparisons, select list) keep the integer form ("1"/"0"), matching how
-  # this adapter stores booleans.
+  # positions (WHERE/HAVING/ON, AND/OR/NOT operands, empty IN) these render as
+  # "1=1"/"1=0", which every Firebird version accepts. Value positions keep the
+  # integer form ("1"/"0"): a BOOLEAN expression in a select list only exists
+  # since Firebird 3.0, and the integer matches how this adapter stores booleans.
   defp pred_expr(true, _sources, _query), do: "1=1"
   defp pred_expr(false, _sources, _query), do: "1=0"
-  defp pred_expr(expression, sources, query), do: expr(expression, sources, query)
+
+  defp pred_expr(expression, sources, query) do
+    if empty_in?(expression),
+      do: "1=0",
+      else: expr(expression, sources, query)
+  end
 
   defp op_to_pred(true, _sources, _query), do: "1=1"
   defp op_to_pred(false, _sources, _query), do: "1=0"
-  defp op_to_pred(expression, sources, query), do: op_to_binary(expression, sources, query)
+
+  defp op_to_pred(expression, sources, query) do
+    if empty_in?(expression),
+      do: "1=0",
+      else: op_to_binary(expression, sources, query)
+  end
+
+  defp empty_in?({:in, _, [_, []]}), do: true
+  defp empty_in?({:in, _, [_, "[]"]}), do: true
+  defp empty_in?({:in, _, [_, {:^, _, [_, 0]}]}), do: true
+  defp empty_in?(_), do: false
 
   ##
   ## Expression generation
@@ -1218,11 +1233,11 @@ defmodule Ecto.Adapters.Firebird.Connection do
   end
 
   def expr({:in, _, [_left, "[]"]}, _sources, _query) do
-    "1=0"
+    "0"
   end
 
   def expr({:in, _, [_left, []]}, _sources, _query) do
-    "1=0"
+    "0"
   end
 
   def expr({:in, _, [left, right]}, sources, query) when is_list(right) do
@@ -1231,7 +1246,7 @@ defmodule Ecto.Adapters.Firebird.Connection do
   end
 
   def expr({:in, _, [_, {:^, _, [_, 0]}]}, _sources, _query) do
-    "1=0"
+    "0"
   end
 
   def expr({:in, _, [left, {:^, _, [_, len]}]}, sources, query) do
