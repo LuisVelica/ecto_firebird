@@ -9,6 +9,7 @@ defmodule Ecto.Adapters.Firebird.Connection do
   alias Ecto.Migration.Reference
   alias Ecto.Migration.Table
   alias Ecto.Query.BooleanExpr
+  alias Ecto.Query.ByExpr
   alias Ecto.Query.JoinExpr
   alias Ecto.Query.QueryExpr
   alias Ecto.Query.WithExpr
@@ -131,8 +132,7 @@ defmodule Ecto.Adapters.Firebird.Connection do
     window = window(query, sources)
     combinations = combinations(query)
     order_by = order_by(query, sources)
-    offset = offset(query, sources)
-    limit = limit(query, sources)
+    offset_limit = offset_limit(query, sources)
 
     [
       cte,
@@ -145,8 +145,7 @@ defmodule Ecto.Adapters.Firebird.Connection do
       window,
       combinations,
       order_by,
-      offset,
-      limit
+      offset_limit
     ]
   end
 
@@ -203,8 +202,46 @@ defmodule Ecto.Adapters.Firebird.Connection do
     ]
   end
 
-  @impl true
-  def insert(prefix, table, [], [[]], on_conflict, returning, []) do
+  if {:insert, 8} in Ecto.Adapters.SQL.Connection.behaviour_info(:callbacks) do
+    @impl true
+    def insert(prefix, table, [], [[]], on_conflict, returning, [], _opts) do
+      do_insert(prefix, table, [], [[]], on_conflict, returning)
+    end
+
+    @impl true
+    def insert(
+          prefix,
+          table,
+          header,
+          rows,
+          on_conflict,
+          returning,
+          _placeholders,
+          _opts
+        ) do
+      do_insert(prefix, table, header, rows, on_conflict, returning)
+    end
+
+    def insert(prefix, table, header, rows, on_conflict, returning, placeholders) do
+      insert(prefix, table, header, rows, on_conflict, returning, placeholders, [])
+    end
+  else
+    @impl true
+    def insert(prefix, table, [], [[]], on_conflict, returning, []) do
+      do_insert(prefix, table, [], [[]], on_conflict, returning)
+    end
+
+    @impl true
+    def insert(prefix, table, header, rows, on_conflict, returning, _placeholders) do
+      do_insert(prefix, table, header, rows, on_conflict, returning)
+    end
+
+    def insert(prefix, table, header, rows, on_conflict, returning, placeholders, _opts) do
+      insert(prefix, table, header, rows, on_conflict, returning, placeholders)
+    end
+  end
+
+  defp do_insert(prefix, table, [], [[]], on_conflict, returning) do
     [
       "INSERT INTO ",
       quote_table(prefix, table),
@@ -214,7 +251,7 @@ defmodule Ecto.Adapters.Firebird.Connection do
     ]
   end
 
-  def insert(prefix, table, header, rows, on_conflict, returning, _placeholders) do
+  defp do_insert(prefix, table, header, rows, on_conflict, returning) do
     fields = quote_names(header)
 
     [
@@ -748,7 +785,7 @@ defmodule Ecto.Adapters.Firebird.Connection do
         # TODO: Should we have cell wise value support?
         #       Essentially ``?1 ?2 ?3`` instead of ``? ? ?``
         # {['?' | Integer.to_string(counter)], counter + 1}
-        {['?'], counter + 1}
+        {[~c"?"], counter + 1}
     end)
   end
 
@@ -786,10 +823,10 @@ defmodule Ecto.Adapters.Firebird.Connection do
   def handle_call(fun, _arity), do: {:fun, Atom.to_string(fun)}
 
   defp distinct(nil, _sources, _query), do: []
-  defp distinct(%QueryExpr{expr: true}, _sources, _query), do: "DISTINCT "
-  defp distinct(%QueryExpr{expr: false}, _sources, _query), do: []
+  defp distinct(%ByExpr{expr: true}, _sources, _query), do: "DISTINCT "
+  defp distinct(%ByExpr{expr: false}, _sources, _query), do: []
 
-  defp distinct(%QueryExpr{expr: exprs}, _sources, query) when is_list(exprs) do
+  defp distinct(%ByExpr{expr: exprs}, _sources, query) when is_list(exprs) do
     raise Ecto.QueryError,
       query: query,
       message: "DISTINCT with multiple columns is not supported by Firebird"
@@ -798,8 +835,6 @@ defmodule Ecto.Adapters.Firebird.Connection do
   def select(%{select: %{fields: fields}, distinct: distinct} = query, sources) do
     [
       "SELECT ",
-      # limit,
-      # offset,
       distinct(distinct, sources, query) | select_fields(fields, sources, query)
     ]
   end
@@ -1009,7 +1044,7 @@ defmodule Ecto.Adapters.Firebird.Connection do
   def group_by(%{group_bys: group_bys} = query, sources) do
     [
       " GROUP BY "
-      | intersperse_map(group_bys, ", ", fn %QueryExpr{expr: expression} ->
+      | intersperse_map(group_bys, ", ", fn %ByExpr{expr: expression} ->
           intersperse_map(expression, ", ", &expr(&1, sources, query))
         end)
     ]
@@ -1082,16 +1117,27 @@ defmodule Ecto.Adapters.Firebird.Connection do
     end
   end
 
-  def limit(%{limit: nil}, _sources), do: []
+  defp offset_limit(%{offset: nil, limit: nil}, _sources), do: []
 
-  def limit(%{limit: %{expr: expression}} = query, sources) do
-    [" TO ", expr(expression, sources, query)]
+  defp offset_limit(%{offset: %{expr: offset_expr}, limit: nil} = query, sources) do
+    [" OFFSET ", expr(offset_expr, sources, query), " ROWS"]
   end
 
-  def offset(%{offset: nil}, _sources), do: []
+  defp offset_limit(%{offset: nil, limit: %{expr: limit_expr}} = query, sources) do
+    [" FETCH FIRST ", expr(limit_expr, sources, query), " ROWS ONLY"]
+  end
 
-  def offset(%{offset: %QueryExpr{expr: expression}} = query, sources) do
-    [" ROWS ", expr(expression, sources, query)]
+  defp offset_limit(
+         %{offset: %{expr: offset_expr}, limit: %{expr: limit_expr}} = query,
+         sources
+       ) do
+    [
+      " OFFSET ",
+      expr(offset_expr, sources, query),
+      " ROWS FETCH FIRST ",
+      expr(limit_expr, sources, query),
+      " ROWS ONLY"
+    ]
   end
 
   defp combinations(%{combinations: combinations}) do
@@ -1163,7 +1209,7 @@ defmodule Ecto.Adapters.Firebird.Connection do
   ##
 
   def expr({:^, [], [_ix]}, _sources, _query) do
-    '?'
+    ~c"?"
   end
 
   # workaround for the fact that Firebird does not support specifying table
@@ -1275,6 +1321,10 @@ defmodule Ecto.Adapters.Firebird.Connection do
 
   def expr({:literal, _, [literal]}, _sources, _query) do
     quote_name(literal)
+  end
+
+  def expr({:identifier, _, [name]}, _sources, _query) do
+    quote_name(name)
   end
 
   def expr({:selected_as, _, [name]}, _sources, _query) do
@@ -1592,13 +1642,6 @@ defmodule Ecto.Adapters.Firebird.Connection do
 
   defp check_expr(%{name: name, expr: expr}),
     do: [" CONSTRAINT ", name, " CHECK (", expr, ")"]
-
-  defp collate_expr(nil), do: []
-
-  defp collate_expr(type) when is_atom(type),
-    do: type |> Atom.to_string() |> collate_expr()
-
-  defp collate_expr(type), do: [" COLLATE ", String.upcase(type)]
 
   defp null_expr(false), do: " NOT NULL"
   defp null_expr(true), do: " NULL"
