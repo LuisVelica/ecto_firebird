@@ -1,13 +1,13 @@
 defmodule EctoFirebird.MixProject do
   use Mix.Project
 
-  @version "0.1.2"
+  @version "0.2.1"
 
   def project do
     [
       app: :ecto_firebird,
       version: @version,
-      elixir: "~> 1.14",
+      elixir: "~> 1.12",
       name: "Ecto Firebird",
       description: "Firebird Ecto3 adapter",
       start_permanent: Mix.env() == :prod,
@@ -45,9 +45,9 @@ defmodule EctoFirebird.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:ecto_sql, "~> 3.11"},
-      {:ecto, "~> 3.11"},
-      {:firebirdex, github: "moctes/firebirdex"},
+      {:ecto_sql, "~> 3.14"},
+      {:ecto, "~> 3.14"},
+      {:firebirdex, github: "moctes/firebirdex", branch: "integrate-upstream-0.3.14"},
       {:jason, ">= 0.0.0"},
       {:temp, "~> 0.4", only: [:test]},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}

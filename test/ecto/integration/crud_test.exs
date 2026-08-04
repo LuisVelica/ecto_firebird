@@ -9,6 +9,33 @@ defmodule Ecto.Integration.CrudTest do
 
   import Ecto.Query
 
+  defp run_unboxed(fun) do
+    Ecto.Adapters.SQL.Sandbox.unboxed_run(TestRepo, fun)
+  end
+
+  describe "in" do
+    test "literal list runs against the database" do
+      {:ok, u1} = TestRepo.insert(%User{name: "John"}, [])
+      {:ok, _u2} = TestRepo.insert(%User{name: "James"}, [])
+
+      names =
+        User
+        |> where([u], u.name in ["John", "Nobody"])
+        |> select([u], u.name)
+        |> TestRepo.all()
+
+      assert names == ["John"]
+
+      ids =
+        User
+        |> where([u], u.id not in [-1, -2])
+        |> select([u], u.id)
+        |> TestRepo.all()
+
+      assert u1.id in ids
+    end
+  end
+
   describe "insert" do
     test "insert user" do
       {:ok, user1} = TestRepo.insert(%User{name: "John"}, [])
@@ -148,63 +175,70 @@ defmodule Ecto.Integration.CrudTest do
 
   describe "transaction" do
     test "successful user and account creation" do
-      {:ok, _} =
-        Ecto.Multi.new()
-        |> Ecto.Multi.insert(:account, fn _ ->
-          Account.changeset(%Account{}, %{name: "Foo"})
-        end)
-        |> Ecto.Multi.insert(:user, fn _ ->
-          User.changeset(%User{}, %{name: "Bob"})
-        end)
-        |> Ecto.Multi.insert(:account_user, fn %{account: account, user: user} ->
-          AccountUser.changeset(%AccountUser{}, %{
-            account_id: account.id,
-            user_id: user.id
-          })
-        end)
-        |> TestRepo.transaction()
+      run_unboxed(fn ->
+        {:ok, _} =
+          Ecto.Multi.new()
+          |> Ecto.Multi.insert(:account, fn _ ->
+            Account.changeset(%Account{}, %{name: "Foo"})
+          end)
+          |> Ecto.Multi.insert(:user, fn _ ->
+            User.changeset(%User{}, %{name: "Bob"})
+          end)
+          |> Ecto.Multi.insert(:account_user, fn %{account: account, user: user} ->
+            AccountUser.changeset(%AccountUser{}, %{
+              account_id: account.id,
+              user_id: user.id
+            })
+          end)
+          |> TestRepo.transaction()
+      end)
     end
 
     test "unsuccessful account creation" do
-      {:error, _, _, _} =
-        Ecto.Multi.new()
-        |> Ecto.Multi.insert(:account, fn _ ->
-          Account.changeset(%Account{}, %{name: nil})
-        end)
-        |> Ecto.Multi.insert(:user, fn _ ->
-          User.changeset(%User{}, %{name: "Bob"})
-        end)
-        |> Ecto.Multi.insert(:account_user, fn %{account: account, user: user} ->
-          AccountUser.changeset(%AccountUser{}, %{
-            account_id: account.id,
-            user_id: user.id
-          })
-        end)
-        |> TestRepo.transaction()
+      run_unboxed(fn ->
+        {:error, _, _, _} =
+          Ecto.Multi.new()
+          |> Ecto.Multi.insert(:account, fn _ ->
+            Account.changeset(%Account{}, %{name: nil})
+          end)
+          |> Ecto.Multi.insert(:user, fn _ ->
+            User.changeset(%User{}, %{name: "Bob"})
+          end)
+          |> Ecto.Multi.insert(:account_user, fn %{account: account, user: user} ->
+            AccountUser.changeset(%AccountUser{}, %{
+              account_id: account.id,
+              user_id: user.id
+            })
+          end)
+          |> TestRepo.transaction()
+      end)
     end
 
     test "unsuccessful user creation" do
-      {:error, _, _, _} =
-        Ecto.Multi.new()
-        |> Ecto.Multi.insert(:account, fn _ ->
-          Account.changeset(%Account{}, %{name: "Foo"})
-        end)
-        |> Ecto.Multi.insert(:user, fn _ ->
-          User.changeset(%User{}, %{name: nil})
-        end)
-        |> Ecto.Multi.insert(:account_user, fn %{account: account, user: user} ->
-          AccountUser.changeset(%AccountUser{}, %{
-            account_id: account.id,
-            user_id: user.id
-          })
-        end)
-        |> TestRepo.transaction()
+      run_unboxed(fn ->
+        {:error, _, _, _} =
+          Ecto.Multi.new()
+          |> Ecto.Multi.insert(:account, fn _ ->
+            Account.changeset(%Account{}, %{name: "Foo"})
+          end)
+          |> Ecto.Multi.insert(:user, fn _ ->
+            User.changeset(%User{}, %{name: nil})
+          end)
+          |> Ecto.Multi.insert(:account_user, fn %{account: account, user: user} ->
+            AccountUser.changeset(%AccountUser{}, %{
+              account_id: account.id,
+              user_id: user.id
+            })
+          end)
+          |> TestRepo.transaction()
+      end)
     end
   end
 
   describe "preloading" do
     test "preloads many to many relation" do
       TestRepo.delete_all(Product)
+      TestRepo.delete_all(AccountUser)
       TestRepo.delete_all(User)
       TestRepo.delete_all(Account)
       account1 = TestRepo.insert!(%Account{name: "Main"})
