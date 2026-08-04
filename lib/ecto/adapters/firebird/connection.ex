@@ -1304,15 +1304,30 @@ defmodule Ecto.Adapters.Firebird.Connection do
     [expr(left, sources, query), " IN ", expr(subquery, sources, query)]
   end
 
-  # Super Hack to handle arrays in json
-  def expr({:in, _, [left, right]}, sources, query) do
-    [
-      expr(left, sources, query),
-      " IN (SELECT value FROM JSON_EACH(",
-      expr(right, sources, query),
-      ?),
-      ?)
-    ]
+  # A literal list on the right-hand side reaches this point already dumped to a
+  # JSON string by dumpers/2 (inherited from the SQLite adapter, where arrays are
+  # stored as JSON and JSON_EACH exists). Firebird has neither, so the list is
+  # expanded back into a plain value list: x IN (1, 2, 3).
+  def expr({:in, _, [left, right]}, sources, query) when is_binary(right) do
+    case Jason.decode(right) do
+      {:ok, []} ->
+        "1=0"
+
+      {:ok, values} when is_list(values) ->
+        args = intersperse_map(values, ?,, &expr(&1, sources, query))
+        [expr(left, sources, query), " IN (", args, ?)]
+
+      _ ->
+        raise Ecto.QueryError,
+          query: query,
+          message: "IN with a non-list right-hand side is not supported by Firebird"
+    end
+  end
+
+  def expr({:in, _, [_left, _right]}, _sources, query) do
+    raise Ecto.QueryError,
+      query: query,
+      message: "IN with a non-list right-hand side is not supported by Firebird"
   end
 
   def expr({:is_nil, _, [arg]}, sources, query) do
@@ -1430,10 +1445,10 @@ defmodule Ecto.Adapters.Firebird.Connection do
   def expr({fun, _, args}, sources, query) when is_atom(fun) and is_list(args) do
     {modifier, args} =
       case args do
-        [_rest, :distinct] ->
-          raise Ecto.QueryError,
-            query: query,
-            message: "Distinct not supported in expressions"
+        # Firebird supports the SQL-92 DISTINCT qualifier inside aggregates,
+        # e.g. COUNT(DISTINCT x) / SUM(DISTINCT x).
+        [rest, :distinct] ->
+          {"DISTINCT ", [rest]}
 
         _ ->
           {[], args}
